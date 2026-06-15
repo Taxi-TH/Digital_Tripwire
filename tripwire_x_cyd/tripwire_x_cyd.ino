@@ -11,6 +11,7 @@
 #include "WebUI.h"
 #include "squirrel_egg.h"
 #include "oui.h"
+#include "pentest.h"
 
 // ======================================================
 // CONSTANTS
@@ -84,8 +85,8 @@ ScanMode currentMode = BLE_MODE;
 
 AppState appState = APP_MENU;
 int menuIndex = 0;
-const char* menuItems[] = {"BLE Scan", "WiFi Scan", "Config AP", "Deauth", "Tripwire", "Hunt", "W-Hunt", "About"};
-const int menuCount = 8;
+const char* menuItems[] = {"BLE Scan", "WiFi Scan", "Config AP", "Deauth", "Tripwire", "Hunt", "W-Hunt", "Probe", "Beacon", "Evil Twin", "MAC Rand", "Handshake", "About"};
+const int menuCount = 13;
 
 // ======================================================
 // BLE
@@ -1450,7 +1451,12 @@ void handleTouch() {
                     case 4: appState = APP_TRIPWIRE; break;
                     case 5: appState = APP_HUNTER; break;
                     case 6: appState = APP_WIFI_HUNT; break;
-                    case 7: appState = APP_ABOUT; break;
+                    case 7: appState = APP_PROBE; break;
+                    case 8: appState = APP_BEACON; break;
+                    case 9: appState = APP_EVIL_TWIN; break;
+                    case 10: appState = APP_MAC_RAND; break;
+                    case 11: appState = APP_HANDSHAKE; break;
+                    case 12: appState = APP_ABOUT; break;
                 }
                 tft.fillScreen(TFT_BLACK);
             } else if (appState == APP_HUNTER && hunterPicking) {
@@ -1704,6 +1710,10 @@ void loop() {
         if (lastAppState == APP_WIFI_HUNT && wifiHuntSniffing) {
             wifiHuntSniffing = false;
         }
+        if (lastAppState == APP_PROBE) probeStop();
+        if (lastAppState == APP_BEACON && beaconFlooding) beaconStop();
+        if (lastAppState == APP_HANDSHAKE && handshakeSniffing) handshakeStop();
+        pentestCleanup();
         tailsDrawn = false;
         hunterDrawn = false;
         wifiHuntDrawn = false;
@@ -2198,6 +2208,56 @@ void loop() {
                 }
 
                 drawTailsScreen();
+            }
+            break;
+    }
+
+    // ========================================================
+    // PENTEST MODES
+    // ========================================================
+    switch (appState) {
+        case APP_PROBE:
+            if (!tailsDrawn) {
+                probeStart();
+                tailsDrawn = true;
+            }
+            if (millis() % 500 == 0) probeDraw();
+            break;
+
+        case APP_BEACON:
+            if (!tailsDrawn) {
+                tft.fillScreen(TFT_BLACK);
+                beaconStart();
+                tailsDrawn = true;
+            }
+            break;
+
+        case APP_EVIL_TWIN:
+            if (!tailsDrawn) {
+                tft.fillScreen(TFT_BLACK);
+                evilTwinScan();
+                tailsDrawn = true;
+            }
+            evilTwinDraw();
+            delay(5000);
+            appState = APP_MENU;
+            break;
+
+        case APP_MAC_RAND:
+            if (!tailsDrawn) {
+                tft.fillScreen(TFT_BLACK);
+                macRandDetect();
+                tailsDrawn = true;
+            }
+            macRandDraw();
+            delay(5000);
+            appState = APP_MENU;
+            break;
+
+        case APP_HANDSHAKE:
+            if (!tailsDrawn) {
+                handshakeStart();
+                tailsDrawn = true;
             }
             break;
     }

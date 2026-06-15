@@ -1,12 +1,13 @@
+#define CONFIG_SPIRAM_SUPPORT 1
 #include <TFT_eSPI.h>
 #include <SPI.h>
 #include <Wire.h>
 
 // #define DISABLE_BLE 1
 
-#ifndef DISABLE_BLE
+// #ifndef DISABLE_BLE
 #include <NimBLEDevice.h>
-#endif
+// #endif
 
 #include <WiFi.h>
 #include <esp_wifi.h>
@@ -18,6 +19,7 @@
 #include "WebUI.h"
 #include "squirrel_egg.h"
 #include "oui.h"
+#include "pentest.h"
 
 // ======================================================
 // CONSTANTS
@@ -61,6 +63,7 @@ int cachedAPCount = 0;
 // ======================================================
 
 TFT_eSPI tft = TFT_eSPI();
+TFT_eSprite frameBuffer = TFT_eSprite(&tft);
 
 // ======================================================
 // PINS (raw GPIO numbers — board-independent)
@@ -90,8 +93,8 @@ ScanMode currentMode = BLE_MODE;
 
 AppState appState = APP_MENU;
 int menuIndex = 0;
-const char* menuItems[] = {"BLE Scan", "WiFi Scan", "Config AP", "Deauth", "Tripwire", "BLE Hunt", "WIFI Hunt", "About"};
-const int menuCount = 8;
+const char* menuItems[] = {"BLE Scan", "WiFi Scan", "Config AP", "Deauth", "Tripwire", "BLE Hunt", "WIFI Hunt", "Evil Twin", "MAC Rand", "About"};
+const int menuCount = 10;
 
 // ======================================================
 // SCAN RESULT QUEUE (producer: BLE callback / consumer: loop)
@@ -142,6 +145,7 @@ int pulseSize = 0;
 
 int sweepAngle = 0;
 int prevSweepX = 120, prevSweepY = 215; // initial sweep line endpoint
+int wifiScrollOffset = 0;
 unsigned long lastScan = 0;
 unsigned long alertTimer = 0;
 unsigned long beepTimer = 0;
@@ -268,7 +272,7 @@ static const char* getTailName(const char* mac) {
 }
 
 static void drawTailsScreen() {
-    tft.fillScreen(TFT_BLACK);
+    frameBuffer.fillScreen(TFT_BLACK);
 
     // Find top tail
     int bestIdx = -1, bestSeen = -1, bestRssi = -100;
@@ -282,10 +286,10 @@ static void drawTailsScreen() {
     }
 
     // Title
-    tft.setTextSize(2);
-    tft.setTextColor(TFT_GREEN);
-    tft.setCursor(80, 6);
-    tft.print("TAILS");
+    frameBuffer.setTextSize(2);
+    frameBuffer.setTextColor(TFT_GREEN);
+    frameBuffer.setCursor(80, 6);
+    frameBuffer.print("TAILS");
 
     // Status + confidence
     const char* status = "SCANNING";
@@ -304,56 +308,56 @@ static void drawTailsScreen() {
     if (tailSlotCount > 10) score += 1;
     const char* conf = (score >= 5) ? "HIGH" : (score >= 3) ? "MED" : "LOW";
 
-    tft.setTextSize(1);
-    tft.setTextColor(statusColor);
-    tft.setCursor(50, 28);
-    tft.print(status);
-    tft.setTextColor(TFT_CYAN);
-    tft.setCursor(82, 28);
-    tft.printf("CONF:%s", conf);
+    frameBuffer.setTextSize(1);
+    frameBuffer.setTextColor(statusColor);
+    frameBuffer.setCursor(50, 28);
+    frameBuffer.print(status);
+    frameBuffer.setTextColor(TFT_CYAN);
+    frameBuffer.setCursor(82, 28);
+    frameBuffer.printf("CONF:%s", conf);
 
     // Stats line
-    tft.setTextColor(TFT_WHITE);
-    tft.setCursor(50, 44);
+    frameBuffer.setTextColor(TFT_WHITE);
+    frameBuffer.setCursor(50, 44);
     if (bestIdx >= 0) {
-        tft.printf("Tail: %d/%d", bestSeen, TAILS_WINDOW);
-        tft.setCursor(128, 44);
-        tft.printf("Devs: %d", tailSlotCount);
+        frameBuffer.printf("Tail: %d/%d", bestSeen, TAILS_WINDOW);
+        frameBuffer.setCursor(128, 44);
+        frameBuffer.printf("Devs: %d", tailSlotCount);
     } else {
-        tft.print("Building window...");
+        frameBuffer.print("Building window...");
     }
 
     // RSSI bar + name for top tail
     if (bestIdx >= 0) {
         int bv = tailsBarValue(bestRssi);
-        tft.setTextColor(TFT_WHITE);
-        tft.setCursor(50, 60);
-        tft.printf("RSSI: %d dBm", bestRssi);
-        tft.setCursor(50, 74);
+        frameBuffer.setTextColor(TFT_WHITE);
+        frameBuffer.setCursor(50, 60);
+        frameBuffer.printf("RSSI: %d dBm", bestRssi);
+        frameBuffer.setCursor(50, 74);
         unsigned int barColor;
         if (bestRssi >= -55) barColor = TFT_RED;
         else if (bestRssi >= -65) barColor = TFT_ORANGE;
         else if (bestRssi >= -75) barColor = TFT_YELLOW;
         else barColor = TFT_GREEN;
-        tft.setTextColor(barColor);
-        for (int b = 0; b < bv; b++) tft.print("#");
-        for (int b = bv; b < 10; b++) tft.print("-");
+        frameBuffer.setTextColor(barColor);
+        for (int b = 0; b < bv; b++) frameBuffer.print("#");
+        for (int b = bv; b < 10; b++) frameBuffer.print("-");
 
         const char* nm = getTailName(tailSlots[bestIdx].mac);
         if (nm && nm[0]) {
-            tft.setTextColor(TFT_GREEN);
-            tft.setCursor(30, 90);
+            frameBuffer.setTextColor(TFT_GREEN);
+            frameBuffer.setCursor(30, 90);
             char buf[13];
             strncpy(buf, nm, 12);
             buf[12] = '\0';
-            tft.print(buf);
+            frameBuffer.print(buf);
         }
     }
 
     // Separator
-    tft.setTextColor(TFT_DARKGREEN);
-    tft.setCursor(50, 106);
-    tft.print("--- Top Tails ---");
+    frameBuffer.setTextColor(TFT_DARKGREEN);
+    frameBuffer.setCursor(50, 106);
+    frameBuffer.print("--- Top Tails ---");
 
     // Gather and sort top tails
     struct TailEntry { int idx; int seen; int rssi; char mac[18]; int bars; };
@@ -381,44 +385,45 @@ static void drawTailsScreen() {
     // Display sorted tails
     for (int i = 0; i < sortedCount && i < TAILS_MAX_SHOW; i++) {
         int y = 118 + i * 12;
-        tft.setTextSize(1);
+        frameBuffer.setTextSize(1);
 
         // Flag
         const char* flag = "  ";
         if (sorted[i].seen >= TAILS_ALERT_MIN && sorted[i].rssi >= TAILS_STRONG_RSSI) flag = "!!";
         else if (sorted[i].seen >= TAILS_WATCH_MIN) flag = "! ";
 
-        tft.setTextColor(TFT_YELLOW);
-        tft.setCursor(8, y);
-        tft.print(flag);
+        frameBuffer.setTextColor(TFT_YELLOW);
+        frameBuffer.setCursor(8, y);
+        frameBuffer.print(flag);
 
         // Short MAC
-        tft.setTextColor(sorted[i].seen >= TAILS_WATCH_MIN ? TFT_WHITE : TFT_DARKGREEN);
-        tft.setCursor(28, y);
+        frameBuffer.setTextColor(sorted[i].seen >= TAILS_WATCH_MIN ? TFT_WHITE : TFT_DARKGREEN);
+        frameBuffer.setCursor(28, y);
         char sm[10];
         const char* m = sorted[i].mac;
         snprintf(sm, 10, "%c%c:%c%c:%c%c:%c%c", m[9], m[10], m[12], m[13], m[15], m[16], m[0], m[1]);
-        tft.print(sm);
+        frameBuffer.print(sm);
 
         // Seen count
-        tft.setTextColor(TFT_CYAN);
-        tft.setCursor(96, y);
-        tft.printf("%2d/%d", sorted[i].seen, TAILS_WINDOW);
+        frameBuffer.setTextColor(TFT_CYAN);
+        frameBuffer.setCursor(96, y);
+        frameBuffer.printf("%2d/%d", sorted[i].seen, TAILS_WINDOW);
 
         // RSSI
-        tft.setTextColor(sorted[i].rssi >= TAILS_STRONG_RSSI ? TFT_RED : TFT_WHITE);
-        tft.setCursor(150, y);
-        tft.print(sorted[i].rssi);
+        frameBuffer.setTextColor(sorted[i].rssi >= TAILS_STRONG_RSSI ? TFT_RED : TFT_WHITE);
+        frameBuffer.setCursor(150, y);
+        frameBuffer.print(sorted[i].rssi);
 
         // Bars
-        tft.setTextColor(sorted[i].rssi >= -55 ? TFT_RED : TFT_GREEN);
-        tft.setCursor(178, y);
-        for (int b = 0; b < sorted[i].bars; b++) tft.print("#");
+        frameBuffer.setTextColor(sorted[i].rssi >= -55 ? TFT_RED : TFT_GREEN);
+        frameBuffer.setCursor(178, y);
+        for (int b = 0; b < sorted[i].bars; b++) frameBuffer.print("#");
     }
 
-    tft.setTextColor(TFT_DARKGREEN);
-    tft.setCursor(75, 218);
-    tft.print("HOLD TO RETURN");
+    frameBuffer.setTextColor(TFT_DARKGREEN);
+    frameBuffer.setCursor(75, 218);
+    frameBuffer.print("HOLD TO RETURN");
+    frameBuffer.pushSprite(0, 0);
 
     // Update web-accessible globals
     tripwireBaselineCount = tailSlotCount;
@@ -517,16 +522,16 @@ static int wifiHuntFastScan() {
 }
 
 static void drawHunterPickScreen() {
-    tft.fillScreen(TFT_BLACK);
-    tft.setTextSize(2);
-    tft.setTextColor(TFT_GREEN);
-    tft.setCursor(80, 10);
-    tft.print("HUNT");
+    frameBuffer.fillScreen(TFT_BLACK);
+    frameBuffer.setTextSize(2);
+    frameBuffer.setTextColor(TFT_GREEN);
+    frameBuffer.setCursor(80, 10);
+    frameBuffer.print("HUNT");
 
-    tft.setTextSize(1);
-    tft.setTextColor(TFT_CYAN);
-    tft.setCursor(45, 34);
-    tft.print("Pick a target device:");
+    frameBuffer.setTextSize(1);
+    frameBuffer.setTextColor(TFT_CYAN);
+    frameBuffer.setCursor(45, 34);
+    frameBuffer.print("Pick a target device:");
 
     // Gather top tails sorted by seen + RSSI
     struct { int idx; int seen; int rssi; char mac[18]; int bars; } list[HUNTER_PICK_COUNT];
@@ -551,16 +556,16 @@ static void drawHunterPickScreen() {
     }
 
     if (lc == 0) {
-        tft.setTextColor(TFT_WHITE);
-        tft.setCursor(25, 80);
-        tft.print("No devices tracked yet.");
-        tft.setCursor(25, 100);
-        tft.print("Run Tripwire first to");
-        tft.setCursor(25, 120);
-        tft.print("build a tail history.");
-        tft.setTextColor(TFT_DARKGREEN);
-        tft.setCursor(65, 218);
-        tft.print("HOLD TO RETURN");
+        frameBuffer.setTextColor(TFT_WHITE);
+        frameBuffer.setCursor(25, 80);
+        frameBuffer.print("No devices tracked yet.");
+        frameBuffer.setCursor(25, 100);
+        frameBuffer.print("Run Tripwire first to");
+        frameBuffer.setCursor(25, 120);
+        frameBuffer.print("build a tail history.");
+        frameBuffer.setTextColor(TFT_DARKGREEN);
+        frameBuffer.setCursor(65, 218);
+        frameBuffer.print("HOLD TO RETURN");
         return;
     }
 
@@ -575,63 +580,65 @@ static void drawHunterPickScreen() {
         int y = startY + i * itemH;
         bool sel = (idx == hunterPickIndex);
         if (sel) {
-            tft.fillRoundRect(8, y-2, 224, itemH+2, 4, tft.color565(30, 60, 30));
+            frameBuffer.fillRoundRect(8, y-2, 224, itemH+2, 4, frameBuffer.color565(30, 60, 30));
         }
         const char* flag = (list[idx].seen >= TAILS_ALERT_MIN && list[idx].rssi >= TAILS_STRONG_RSSI) ? "!!" :
                            (list[idx].seen >= TAILS_WATCH_MIN) ? "!" : "  ";
-        tft.setTextColor(sel ? TFT_GREEN : TFT_YELLOW);
-        tft.setCursor(12, y);
-        tft.print(flag);
+        frameBuffer.setTextColor(sel ? TFT_GREEN : TFT_YELLOW);
+        frameBuffer.setCursor(12, y);
+        frameBuffer.print(flag);
 
         const char* m = list[idx].mac;
         char sm[10];
         snprintf(sm, 10, "%c%c:%c%c:%c%c:%c%c", m[9], m[10], m[12], m[13], m[15], m[16], m[0], m[1]);
-        tft.setTextColor(TFT_WHITE);
-        tft.setCursor(30, y);
-        tft.print(sm);
-        tft.setTextColor(TFT_CYAN);
-        tft.setCursor(108, y);
-        tft.printf("%2d/%d", list[idx].seen, TAILS_WINDOW);
-        tft.setTextColor(list[idx].rssi >= TAILS_STRONG_RSSI ? TFT_RED : TFT_WHITE);
-        tft.setCursor(156, y);
-        tft.print(list[idx].rssi);
-        tft.setTextColor(list[idx].rssi >= -55 ? TFT_RED : TFT_GREEN);
-        tft.setCursor(180, y);
-        for (int b = 0; b < list[idx].bars; b++) tft.print("#");
+        frameBuffer.setTextColor(TFT_WHITE);
+        frameBuffer.setCursor(30, y);
+        frameBuffer.print(sm);
+        frameBuffer.setTextColor(TFT_CYAN);
+        frameBuffer.setCursor(108, y);
+        frameBuffer.printf("%2d/%d", list[idx].seen, TAILS_WINDOW);
+        frameBuffer.setTextColor(list[idx].rssi >= TAILS_STRONG_RSSI ? TFT_RED : TFT_WHITE);
+        frameBuffer.setCursor(156, y);
+        frameBuffer.print(list[idx].rssi);
+        frameBuffer.setTextColor(list[idx].rssi >= -55 ? TFT_RED : TFT_GREEN);
+        frameBuffer.setCursor(180, y);
+        for (int b = 0; b < list[idx].bars; b++) frameBuffer.print("#");
     }
 
-    tft.setTextColor(TFT_DARKGREEN);
-    tft.setCursor(45, 218);
-    tft.print("HOLD TO RETURN");
+    frameBuffer.setTextColor(TFT_DARKGREEN);
+    frameBuffer.setCursor(45, 218);
+    frameBuffer.print("HOLD TO RETURN");
+    frameBuffer.pushSprite(0, 0);
 }
 
 static void drawHuntScreen() {
-    tft.fillScreen(TFT_BLACK);
-    tft.setTextSize(2);
-    tft.setTextColor(TFT_GREEN);
-    tft.setCursor(65, 10);
-    tft.print("BLE HUNT");
+    frameBuffer.fillScreen(TFT_BLACK);
+    frameBuffer.fillScreen(TFT_BLACK);
+    frameBuffer.setTextSize(2);
+    frameBuffer.setTextColor(TFT_GREEN);
+    frameBuffer.setCursor(65, 10);
+    frameBuffer.print("BLE HUNT");
 
-    tft.setTextSize(1);
-    tft.setTextColor(TFT_CYAN);
-    tft.setCursor(45, 34);
-    tft.print("Target:");
+    frameBuffer.setTextSize(1);
+    frameBuffer.setTextColor(TFT_CYAN);
+    frameBuffer.setCursor(45, 34);
+    frameBuffer.print("Target:");
 
     if (hunterTargetName[0]) {
-        tft.setTextColor(TFT_WHITE);
-        tft.setCursor(75, 34);
+        frameBuffer.setTextColor(TFT_WHITE);
+        frameBuffer.setCursor(75, 34);
         char buf[13];
         strncpy(buf, hunterTargetName, 12);
         buf[12] = '\0';
-        tft.print(buf);
+        frameBuffer.print(buf);
     }
 
-    tft.setTextColor(TFT_DARKGREEN);
-    tft.setCursor(25, 52);
+    frameBuffer.setTextColor(TFT_DARKGREEN);
+    frameBuffer.setCursor(25, 52);
     char sm[10];
     const char* m = hunterTargetMac;
     snprintf(sm, 10, "%c%c:%c%c:%c%c:%c%c", m[9], m[10], m[12], m[13], m[15], m[16], m[0], m[1]);
-    tft.print(sm);
+    frameBuffer.print(sm);
 
     // Signal level indicator
     int level = (hunterTargetRssi >= -35) ? 4 : (hunterTargetRssi >= -55) ? 3 :
@@ -645,24 +652,24 @@ static void drawHuntScreen() {
         default: levelLabel = "WEAK"; levelColor = TFT_GREEN; break;
     }
 
-    tft.setTextSize(2);
-    tft.setTextColor(levelColor);
-    tft.setCursor(15, 78);
-    tft.print(levelLabel);
+    frameBuffer.setTextSize(2);
+    frameBuffer.setTextColor(levelColor);
+    frameBuffer.setCursor(15, 78);
+    frameBuffer.print(levelLabel);
 
     // RSSI value
-    tft.setTextSize(1);
-    tft.setTextColor(TFT_WHITE);
-    tft.setCursor(120, 78);
-    tft.printf("%d dBm", hunterTargetRssi);
+    frameBuffer.setTextSize(1);
+    frameBuffer.setTextColor(TFT_WHITE);
+    frameBuffer.setCursor(120, 78);
+    frameBuffer.printf("%d dBm", hunterTargetRssi);
 
     // Large RSSI bar
     int bv = tailsBarValue(hunterTargetRssi);
-    tft.setTextSize(2);
-    tft.setTextColor(levelColor);
-    tft.setCursor(15, 110);
-    for (int b = 0; b < bv; b++) tft.print("#");
-    for (int b = bv; b < 10; b++) tft.print("-");
+    frameBuffer.setTextSize(2);
+    frameBuffer.setTextColor(levelColor);
+    frameBuffer.setCursor(15, 110);
+    for (int b = 0; b < bv; b++) frameBuffer.print("#");
+    for (int b = bv; b < 10; b++) frameBuffer.print("-");
 
     // Animated signal-wave circles
     static unsigned long hunterWaveMs = 0;
@@ -675,18 +682,19 @@ static void drawHuntScreen() {
     int cx = 200, cy = 105;
     for (int r = 0; r < 4; r++) {
         int radius = 10 + r * 8 + wavePhase * 2;
-        tft.drawCircle(cx, cy, radius, fadeColors[r]);
+        frameBuffer.drawCircle(cx, cy, radius, fadeColors[r]);
     }
 
     // Beep history indicator
-    tft.setTextSize(1);
-    tft.setTextColor(TFT_DARKGREEN);
-    tft.setCursor(15, 140);
-    tft.print("Signal beeps active");
+    frameBuffer.setTextSize(1);
+    frameBuffer.setTextColor(TFT_DARKGREEN);
+    frameBuffer.setCursor(15, 140);
+    frameBuffer.print("Signal beeps active");
 
-    tft.setTextColor(TFT_DARKGREEN);
-    tft.setCursor(55, 218);
-    tft.print("HOLD TO RETURN");
+    frameBuffer.setTextColor(TFT_DARKGREEN);
+    frameBuffer.setCursor(55, 218);
+    frameBuffer.print("HOLD TO RETURN");
+    frameBuffer.pushSprite(0, 0);
 }
 
 // ======================================================
@@ -694,28 +702,28 @@ static void drawHuntScreen() {
 // ======================================================
 
 static void drawWifiHuntPickScreen() {
-    tft.fillScreen(TFT_BLACK);
-    tft.setTextSize(2);
-    tft.setTextColor(TFT_GREEN);
-    tft.setCursor(65, 15);
-    tft.print("WIFI HUNT");
+    frameBuffer.fillScreen(TFT_BLACK);
+    frameBuffer.setTextSize(2);
+    frameBuffer.setTextColor(TFT_GREEN);
+    frameBuffer.setCursor(65, 15);
+    frameBuffer.print("WIFI HUNT");
 
-    tft.setTextSize(1);
-    tft.setTextColor(TFT_CYAN);
-    tft.setCursor(40, 39);
-    tft.print("Pick a target AP:");
+    frameBuffer.setTextSize(1);
+    frameBuffer.setTextColor(TFT_CYAN);
+    frameBuffer.setCursor(40, 39);
+    frameBuffer.print("Pick a target AP:");
 
     if (cachedAPCount == 0) {
-        tft.setTextColor(TFT_WHITE);
-        tft.setCursor(15, 80);
-        tft.print("No APs cached.");
-        tft.setCursor(15, 100);
-        tft.print("Run WiFi Scan first");
-        tft.setCursor(15, 120);
-        tft.print("to populate AP list.");
-        tft.setTextColor(TFT_DARKGREEN);
-        tft.setCursor(70, 218);
-        tft.print("HOLD TO RETURN");
+        frameBuffer.setTextColor(TFT_WHITE);
+        frameBuffer.setCursor(15, 80);
+        frameBuffer.print("No APs cached.");
+        frameBuffer.setCursor(15, 100);
+        frameBuffer.print("Run WiFi Scan first");
+        frameBuffer.setCursor(15, 120);
+        frameBuffer.print("to populate AP list.");
+        frameBuffer.setTextColor(TFT_DARKGREEN);
+        frameBuffer.setCursor(70, 218);
+        frameBuffer.print("HOLD TO RETURN");
         return;
     }
 
@@ -730,64 +738,65 @@ static void drawWifiHuntPickScreen() {
         int y = startY + i * itemH;
         bool sel = (idx == wifiHuntPickIndex);
         if (sel) {
-            tft.fillRoundRect(8, y-2, 224, itemH+2, 4, tft.color565(30, 60, 30));
+            frameBuffer.fillRoundRect(8, y-2, 224, itemH+2, 4, frameBuffer.color565(30, 60, 30));
         }
 
         // SSID (first 10 chars)
-        tft.setTextColor(sel ? TFT_GREEN : TFT_WHITE);
-        tft.setCursor(25, y);
+        frameBuffer.setTextColor(sel ? TFT_GREEN : TFT_WHITE);
+        frameBuffer.setCursor(25, y);
         char buf[11];
         strncpy(buf, cachedAPs[idx].ssid, 10);
         buf[10] = '\0';
-        tft.print(buf);
+        frameBuffer.print(buf);
 
         // RSSI
-        tft.setTextColor(cachedAPs[idx].rssi >= TAILS_STRONG_RSSI ? TFT_RED : TFT_WHITE);
-        tft.setCursor(132, y);
-        tft.print(cachedAPs[idx].rssi);
-        tft.print("dBm");
+        frameBuffer.setTextColor(cachedAPs[idx].rssi >= TAILS_STRONG_RSSI ? TFT_RED : TFT_WHITE);
+        frameBuffer.setCursor(132, y);
+        frameBuffer.print(cachedAPs[idx].rssi);
+        frameBuffer.print("dBm");
 
         // Channel
-        tft.setTextColor(TFT_DARKGREEN);
-        tft.setCursor(192, y);
-        tft.print("ch");
-        tft.print(cachedAPs[idx].channel);
+        frameBuffer.setTextColor(TFT_DARKGREEN);
+        frameBuffer.setCursor(192, y);
+        frameBuffer.print("ch");
+        frameBuffer.print(cachedAPs[idx].channel);
     }
 
-    tft.setTextColor(TFT_DARKGREEN);
-    tft.setCursor(65, 218);
-    tft.print("HOLD TO SELECT");
+    frameBuffer.setTextColor(TFT_DARKGREEN);
+    frameBuffer.setCursor(65, 218);
+    frameBuffer.print("HOLD TO SELECT");
+    frameBuffer.pushSprite(0, 0);
 }
 
 static void drawWifiHuntScreen() {
-    tft.fillScreen(TFT_BLACK);
-    tft.setTextSize(2);
-    tft.setTextColor(TFT_GREEN);
-    tft.setCursor(60, 10);
-    tft.print("WIFI HUNT");
+    frameBuffer.fillScreen(TFT_BLACK);
+    frameBuffer.setTextSize(2);
+    frameBuffer.setTextColor(TFT_GREEN);
+    frameBuffer.setCursor(60, 10);
+    frameBuffer.print("WIFI HUNT");
 
-    tft.setTextSize(1);
+    frameBuffer.setTextSize(1);
 
     // Target SSID
-    tft.setTextColor(TFT_CYAN);
-    tft.setCursor(35, 34);
-    tft.print("Target:");
+    frameBuffer.setTextColor(TFT_CYAN);
+    frameBuffer.setCursor(35, 34);
+    frameBuffer.print("Target:");
     if (wifiHuntTargetSsid[0]) {
-        tft.setTextColor(TFT_WHITE);
-        tft.setCursor(75, 34);
+        frameBuffer.setTextColor(TFT_WHITE);
+        frameBuffer.setCursor(75, 34);
         char buf[13];
         strncpy(buf, wifiHuntTargetSsid, 12);
         buf[12] = '\0';
-        tft.print(buf);
+        frameBuffer.print(buf);
     }
 
     // BSSID (short)
-    tft.setTextColor(TFT_DARKGREEN);
-    tft.setCursor(35, 52);
+    frameBuffer.setTextColor(TFT_DARKGREEN);
+    frameBuffer.setCursor(35, 52);
     const char* m = wifiHuntTargetBssid;
     char sm[10];
     snprintf(sm, 10, "%c%c:%c%c:%c%c:%c%c", m[9], m[10], m[12], m[13], m[15], m[16], m[0], m[1]);
-    tft.print(sm);
+    frameBuffer.print(sm);
 
     // Signal level
     int level = (wifiHuntTargetRssi >= -35) ? 4 : (wifiHuntTargetRssi >= -55) ? 3 :
@@ -801,22 +810,22 @@ static void drawWifiHuntScreen() {
         default: levelLabel = "WEAK"; levelColor = TFT_GREEN; break;
     }
 
-    tft.setTextSize(2);
-    tft.setTextColor(levelColor);
-    tft.setCursor(15, 78);
-    tft.print(levelLabel);
+    frameBuffer.setTextSize(2);
+    frameBuffer.setTextColor(levelColor);
+    frameBuffer.setCursor(15, 78);
+    frameBuffer.print(levelLabel);
 
-    tft.setTextSize(1);
-    tft.setTextColor(TFT_WHITE);
-    tft.setCursor(120, 78);
-    tft.printf("%d dBm", wifiHuntTargetRssi);
+    frameBuffer.setTextSize(1);
+    frameBuffer.setTextColor(TFT_WHITE);
+    frameBuffer.setCursor(120, 78);
+    frameBuffer.printf("%d dBm", wifiHuntTargetRssi);
 
     int bv = tailsBarValue(wifiHuntTargetRssi);
-    tft.setTextSize(2);
-    tft.setTextColor(levelColor);
-    tft.setCursor(15, 110);
-    for (int b = 0; b < bv; b++) tft.print("#");
-    for (int b = bv; b < 10; b++) tft.print("-");
+    frameBuffer.setTextSize(2);
+    frameBuffer.setTextColor(levelColor);
+    frameBuffer.setCursor(15, 110);
+    for (int b = 0; b < bv; b++) frameBuffer.print("#");
+    for (int b = bv; b < 10; b++) frameBuffer.print("-");
 
     // Animated wave
     static unsigned long wifiWaveMs = 0;
@@ -829,17 +838,18 @@ static void drawWifiHuntScreen() {
     int cx = 200, cy = 105;
     for (int r = 0; r < 4; r++) {
         int radius = 10 + r * 8 + wavePhase * 2;
-        tft.drawCircle(cx, cy, radius, fadeColors[r]);
+        frameBuffer.drawCircle(cx, cy, radius, fadeColors[r]);
     }
 
-    tft.setTextSize(1);
-    tft.setTextColor(TFT_DARKGREEN);
-    tft.setCursor(15, 140);
-    tft.print("WiFi scanning...");
+    frameBuffer.setTextSize(1);
+    frameBuffer.setTextColor(TFT_DARKGREEN);
+    frameBuffer.setCursor(15, 140);
+    frameBuffer.print("WiFi scanning...");
 
-    tft.setTextColor(TFT_DARKGREEN);
-    tft.setCursor(55, 218);
-    tft.print("HOLD TO RETURN");
+    frameBuffer.setTextColor(TFT_DARKGREEN);
+    frameBuffer.setCursor(55, 218);
+    frameBuffer.print("HOLD TO RETURN");
+    frameBuffer.pushSprite(0, 0);
 }
 
 // ======================================================
@@ -1087,14 +1097,14 @@ void updateTargetTracking() {
 // ======================================================
 
 void drawRadarBg() {
-    tft.fillScreen(TFT_BLACK);
+    frameBuffer.fillScreen(TFT_BLACK);
     const int cx = 120, cy = 120;
-    tft.drawCircle(cx, cy, 100, TFT_DARKGREEN);
-    tft.drawCircle(cx, cy, 75, TFT_DARKGREEN);
-    tft.drawCircle(cx, cy, 50, TFT_DARKGREEN);
-    tft.drawCircle(cx, cy, 25, TFT_DARKGREEN);
-    tft.drawLine(cx, 20, cx, 220, TFT_DARKGREEN);
-    tft.drawLine(20, cy, 240 - 20, cy, TFT_DARKGREEN);
+    frameBuffer.drawCircle(cx, cy, 100, TFT_DARKGREEN);
+    frameBuffer.drawCircle(cx, cy, 75, TFT_DARKGREEN);
+    frameBuffer.drawCircle(cx, cy, 50, TFT_DARKGREEN);
+    frameBuffer.drawCircle(cx, cy, 25, TFT_DARKGREEN);
+    frameBuffer.drawLine(cx, 20, cx, 220, TFT_DARKGREEN);
+    frameBuffer.drawLine(20, cy, 240 - 20, cy, TFT_DARKGREEN);
 }
 
 void drawSweep() {
@@ -1102,7 +1112,7 @@ void drawSweep() {
     float rad = sweepAngle * 0.0174533f;
     int x = cx + (int)(cosf(rad) * 95.0f);
     int y = cy + (int)(sinf(rad) * 95.0f);
-    tft.drawLine(cx, cy, x, y, TFT_GREEN);
+    frameBuffer.drawLine(cx, cy, x, y, TFT_GREEN);
     sweepAngle += SWEEP_STEP;
     if (sweepAngle >= 360) sweepAngle = 0;
 }
@@ -1130,25 +1140,25 @@ void drawDevices() {
         if (d.rssi > RSSI_CRITICAL) colour = TFT_RED;
         if (i == activeTargetIndex) colour = TFT_MAGENTA;
 
-        tft.fillCircle(x, y, 2, colour);
-        tft.drawCircle(x, y, 4, colour);
+        frameBuffer.fillCircle(x, y, 2, colour);
+        frameBuffer.drawCircle(x, y, 4, colour);
 
         if (i == activeTargetIndex) {
-            tft.drawCircle(x, y, 6 + pulseSize, TFT_MAGENTA);
-            tft.drawCircle(x, y, 10 + pulseSize, TFT_MAGENTA);
+            frameBuffer.drawCircle(x, y, 6 + pulseSize, TFT_MAGENTA);
+            frameBuffer.drawCircle(x, y, 10 + pulseSize, TFT_MAGENTA);
         }
 
         if (d.rssi > RSSI_HIGH_RISK || i == activeTargetIndex) {
-            tft.setTextSize(1);
-            tft.setTextColor(colour);
-            tft.setCursor(x + 8, y - 5);
+            frameBuffer.setTextSize(1);
+            frameBuffer.setTextColor(colour);
+            frameBuffer.setCursor(x + 8, y - 5);
             if (strcmp(d.name, "UNKNOWN") != 0) {
                 char buf[9];
                 strncpy(buf, d.name, 8);
                 buf[8] = '\0';
-                tft.print(buf);
+                frameBuffer.print(buf);
             } else {
-                tft.print("DEVICE");
+                frameBuffer.print("DEVICE");
             }
         }
     }
@@ -1159,70 +1169,152 @@ void drawDevices() {
 // ======================================================
 
 void drawUI() {
-    tft.setTextColor(TFT_GREEN);
-    tft.setTextSize(2);
-    tft.setCursor(65, 15);
-    tft.print(currentMode == BLE_MODE ? "BLE MODE" : "WIFI MODE");
+    frameBuffer.setTextColor(TFT_GREEN);
+    frameBuffer.setTextSize(2);
+    frameBuffer.setCursor(65, 15);
+    frameBuffer.print(currentMode == BLE_MODE ? "BLE MODE" : "WIFI MODE");
 
     if (activeTargetIndex >= 0 && activeTargetIndex < deviceCount) {
         const DeviceInfo& t = devices[activeTargetIndex];
 
-        tft.setTextSize(1);
-        tft.setTextColor(TFT_MAGENTA);
-        tft.setCursor(55, 38);
-        tft.print("TARGET LOCK");
+        frameBuffer.setTextSize(1);
+        frameBuffer.setTextColor(TFT_MAGENTA);
+        frameBuffer.setCursor(55, 38);
+        frameBuffer.print("TARGET LOCK");
 
-        tft.setCursor(45, 50);
+        frameBuffer.setCursor(45, 50);
         if (strcmp(t.name, "UNKNOWN") != 0) {
             char buf[13];
             strncpy(buf, t.name, 12);
             buf[12] = '\0';
-            tft.print(buf);
+            frameBuffer.print(buf);
         } else {
-            tft.print("UNKNOWN DEVICE");
+            frameBuffer.print("UNKNOWN DEVICE");
         }
 
-        tft.setCursor(90, 62);
-        tft.print(t.rssi);
-        tft.print(" dBm");
+        frameBuffer.setCursor(90, 62);
+        frameBuffer.print(t.rssi);
+        frameBuffer.print(" dBm");
 
         const char* vendor = lookupVendor(t.mac);
         if (vendor) {
-            tft.setCursor(20, 74);
-            tft.setTextColor(TFT_CYAN);
-            tft.print(vendor);
+            frameBuffer.setCursor(20, 74);
+            frameBuffer.setTextColor(TFT_CYAN);
+            frameBuffer.print(vendor);
         }
     }
 
-    tft.setTextSize(1);
-    tft.setTextColor(TFT_GREEN);
-    tft.setCursor(70, 180);
-    tft.printf("LOGS %d", totalLogs);
+    frameBuffer.setTextSize(1);
+    frameBuffer.setTextColor(TFT_GREEN);
+    frameBuffer.setCursor(70, 180);
+    frameBuffer.printf("LOGS %d", totalLogs);
 
-    tft.setCursor(70, 200);
-    tft.printf("LIVE %d", deviceCount);
+    frameBuffer.setCursor(70, 200);
+    frameBuffer.printf("LIVE %d", deviceCount);
 
-    tft.setCursor(70, 220);
-    tft.printf("KNOWN %d", knownDeviceCount);
+    frameBuffer.setCursor(70, 220);
+    frameBuffer.printf("KNOWN %d", knownDeviceCount);
 
-    tft.setCursor(150, 220);
-    tft.print(currentMode == BLE_MODE ? "WIFI>" : "BLE>");
+    frameBuffer.setCursor(150, 220);
+    frameBuffer.print(currentMode == BLE_MODE ? "WIFI>" : "BLE>");
 
     if (!sdReady) {
-        tft.setTextColor(TFT_RED);
-        tft.setCursor(5, 5);
-        tft.setTextSize(1);
-        tft.print("NO SD");
+        frameBuffer.setTextColor(TFT_RED);
+        frameBuffer.setCursor(5, 5);
+        frameBuffer.setTextSize(1);
+        frameBuffer.print("NO SD");
     }
 
     if (newDeviceDetected && millis() - alertTimer < 3000) {
-        tft.fillRoundRect(45, 2, 150, 20, 6, TFT_RED);
-        tft.setTextColor(TFT_WHITE);
-        tft.setCursor(78, 5);
-        tft.setTextSize(1);
-        tft.print("NEW DEVICE");
+        frameBuffer.fillRoundRect(45, 2, 150, 20, 6, TFT_RED);
+        frameBuffer.setTextColor(TFT_WHITE);
+        frameBuffer.setCursor(78, 5);
+        frameBuffer.setTextSize(1);
+        frameBuffer.print("NEW DEVICE");
     } else {
         newDeviceDetected = false;
+    }
+}
+
+// ======================================================
+// WIFI AP LIST VIEW
+// ======================================================
+
+void drawWiFiList() {
+    frameBuffer.fillScreen(TFT_BLACK);
+
+    int count = cachedAPCount;
+    if (count == 0) {
+        frameBuffer.setTextColor(TFT_WHITE);
+        frameBuffer.setTextSize(1);
+        frameBuffer.setCursor(20, 110);
+        frameBuffer.print("No APs found yet...");
+        return;
+    }
+
+    // Header
+    frameBuffer.setTextColor(TFT_CYAN);
+    frameBuffer.setTextSize(1);
+    frameBuffer.setCursor(20, 4);
+    frameBuffer.printf("WiFi APs (%d)", count);
+    frameBuffer.setTextColor(TFT_DARKGREEN);
+    frameBuffer.setCursor(155, 4);
+    frameBuffer.printf("RSSI CH");
+
+    frameBuffer.drawFastHLine(0, 15, 240, TFT_DARKGREEN);
+
+    // Clamp scroll offset
+    int maxOffset = max(0, count - 8);
+    if (wifiScrollOffset > maxOffset) wifiScrollOffset = maxOffset;
+
+    int y = 20;
+    int end = min(count, wifiScrollOffset + 8);
+    for (int i = wifiScrollOffset; i < end; i++) {
+        const CachedAP& ap = cachedAPs[i];
+
+        // RSSI bar
+        int barLen = constrain(map(ap.rssi, -100, -30, 0, 50), 0, 50);
+        uint16_t barColor = TFT_GREEN;
+        if (ap.rssi > -60) barColor = TFT_YELLOW;
+        if (ap.rssi > -45) barColor = TFT_RED;
+        frameBuffer.fillRect(2, y, barLen, 6, barColor);
+
+        // RSSI value
+        frameBuffer.setTextColor(TFT_WHITE);
+        frameBuffer.setCursor(56, y - 2);
+        frameBuffer.printf("%3d", ap.rssi);
+        frameBuffer.print("dBm");
+
+        // Channel
+        frameBuffer.setTextColor(TFT_GREENYELLOW);
+        frameBuffer.setCursor(118, y - 2);
+        if (ap.channel > 0) frameBuffer.printf(" %2d", ap.channel);
+
+        // SSID (truncate to fit)
+        frameBuffer.setTextColor(TFT_WHITE);
+        frameBuffer.setTextSize(1);
+        char ssidBuf[13];
+        strncpy(ssidBuf, ap.ssid, 12);
+        ssidBuf[12] = '\0';
+        if (ssidBuf[0] == '\0') strcpy(ssidBuf, "*HIDDEN*");
+        frameBuffer.setCursor(138, y - 2);
+        frameBuffer.print(ssidBuf);
+
+        // BSSID on second line
+        frameBuffer.setTextColor(TFT_DARKGREY);
+        frameBuffer.setTextSize(1);
+        frameBuffer.setCursor(56, y + 8);
+        frameBuffer.print(ap.bssid);
+
+        y += 26;
+    }
+
+    // Scroll indicator
+    if (maxOffset > 0) {
+        frameBuffer.setTextColor(TFT_GREEN);
+        frameBuffer.setTextSize(1);
+        frameBuffer.setCursor(70, 228);
+        frameBuffer.printf("TAP: %d/%d", wifiScrollOffset + 1, count);
     }
 }
 
@@ -1397,12 +1489,13 @@ void handleTouch() {
                 configTapCount++;
                 if (configTapCount >= 7) {
                     configTapCount = 0;
-                    tft.fillScreen(TFT_BLACK);
-                    tft.pushImage(20, 20, SQUIRREL_EGG_WIDTH, SQUIRREL_EGG_HEIGHT, squirrel_egg);
-                    tft.setTextSize(2);
-                    tft.setTextColor(TFT_CYAN);
-                    tft.setCursor(40, 215);
-                    tft.print("SQUIRREL!");
+                    frameBuffer.fillScreen(TFT_BLACK);
+                    frameBuffer.pushImage(20, 20, SQUIRREL_EGG_WIDTH, SQUIRREL_EGG_HEIGHT, squirrel_egg);
+                    frameBuffer.setTextSize(2);
+                    frameBuffer.setTextColor(TFT_CYAN);
+                    frameBuffer.setCursor(40, 215);
+                    frameBuffer.print("SQUIRREL!");
+                    frameBuffer.pushSprite(0, 0);
                     delay(5000);
                     return;
                 }
@@ -1438,9 +1531,12 @@ void handleTouch() {
             if (appState == APP_MENU) {
                 menuIndex = (menuIndex + 1) % menuCount;
                 firstMenuDraw = true;
-            } else if (appState == APP_BLE_SCAN || appState == APP_WIFI_SCAN) {
+            } else if (appState == APP_BLE_SCAN) {
                 if (deviceCount > 0)
                     activeTargetIndex = (activeTargetIndex + 1) % deviceCount;
+            } else if (appState == APP_WIFI_SCAN) {
+                wifiScrollOffset++;
+                if (wifiScrollOffset >= cachedAPCount) wifiScrollOffset = 0;
             }
         } else {
             // --- LONG HOLD ---
@@ -1456,9 +1552,11 @@ void handleTouch() {
                     case 4: appState = APP_TRIPWIRE; break;
                     case 5: appState = APP_HUNTER; break;
                     case 6: appState = APP_WIFI_HUNT; break;
-                    case 7: appState = APP_ABOUT; break;
+                    case 7: appState = APP_EVIL_TWIN; break;
+                    case 8: appState = APP_MAC_RAND; break;
+                    case 9: appState = APP_ABOUT; break;
                 }
-                tft.fillScreen(TFT_BLACK);
+                frameBuffer.fillScreen(TFT_BLACK);
             }
 #ifndef DISABLE_BLE
             else if (appState == APP_HUNTER && hunterPicking) {
@@ -1517,7 +1615,7 @@ void handleTouch() {
             } else {
                 appState = APP_MENU;
                 menuIndex = 0;
-                tft.fillScreen(TFT_BLACK);
+                frameBuffer.fillScreen(TFT_BLACK);
             }
         }
     }
@@ -1532,81 +1630,84 @@ void handleTouch() {
 // ======================================================
 
 void drawEasterEgg() {
-    tft.fillScreen(TFT_BLACK);
+    frameBuffer.fillScreen(TFT_BLACK);
     for (int y = 0; y < 240; y += 4) {
-        tft.fillRect(0, y, 240, 2, tft.color565(y * 6 % 256, y * 3 % 256, 255 - y));
+        frameBuffer.fillRect(0, y, 240, 2, frameBuffer.color565(y * 6 % 256, y * 3 % 256, 255 - y));
     }
-    tft.fillCircle(120, 100, 50, TFT_BLACK);
-    tft.fillCircle(120, 100, 48, tft.color565(255, 200, 0));
-    tft.fillCircle(110, 90, 6, TFT_BLACK);
-    tft.fillCircle(130, 90, 6, TFT_BLACK);
-    tft.fillCircle(120, 105, 4, TFT_BLACK);
-    tft.fillCircle(120, 110, 8, tft.color565(200, 0, 0));
-    tft.setTextSize(2);
-    tft.setTextColor(TFT_CYAN);
-    tft.setCursor(55, 20);
-    tft.print("EASTER EGG!");
-    tft.setTextSize(1);
-    tft.setTextColor(TFT_WHITE);
-    tft.setCursor(55, 180);
-    tft.print("10 taps, nice!");
-    tft.setCursor(45, 200);
-    tft.print("now hold to return");
+    frameBuffer.fillCircle(120, 100, 50, TFT_BLACK);
+    frameBuffer.fillCircle(120, 100, 48, frameBuffer.color565(255, 200, 0));
+    frameBuffer.fillCircle(110, 90, 6, TFT_BLACK);
+    frameBuffer.fillCircle(130, 90, 6, TFT_BLACK);
+    frameBuffer.fillCircle(120, 105, 4, TFT_BLACK);
+    frameBuffer.fillCircle(120, 110, 8, frameBuffer.color565(200, 0, 0));
+    frameBuffer.setTextSize(2);
+    frameBuffer.setTextColor(TFT_CYAN);
+    frameBuffer.setCursor(55, 20);
+    frameBuffer.print("EASTER EGG!");
+    frameBuffer.setTextSize(1);
+    frameBuffer.setTextColor(TFT_WHITE);
+    frameBuffer.setCursor(55, 180);
+    frameBuffer.print("10 taps, nice!");
+    frameBuffer.setCursor(45, 200);
+    frameBuffer.print("now hold to return");
+    frameBuffer.pushSprite(0, 0);
 }
 
 void drawMenu() {
-    tft.fillScreen(TFT_BLACK);
-    tft.setTextSize(2);
-    tft.setTextColor(TFT_GREEN);
-    tft.setCursor(65, 16);
-    tft.print("TRIPWIRE");
+    frameBuffer.fillScreen(TFT_BLACK);
+    frameBuffer.setTextSize(2);
+    frameBuffer.setTextColor(TFT_GREEN);
+    frameBuffer.setCursor(65, 16);
+    frameBuffer.print("TRIPWIRE");
 
     #define MENU_VISIBLE 4
     int start = constrain(menuIndex - 1, 0, max(0, menuCount - MENU_VISIBLE));
 
-    tft.setTextSize(1);
+    frameBuffer.setTextSize(1);
     for (int i = 0; i < MENU_VISIBLE; i++) {
         int idx = start + i;
         if (idx >= menuCount) break;
         int y = 62 + i * 36;
         if (idx == menuIndex) {
-            tft.fillRoundRect(50, y - 4, 140, 22, 6, TFT_DARKGREEN);
-            tft.setTextColor(TFT_BLACK);
-            tft.setCursor(62, y);
-            tft.print(menuItems[idx]);
+            frameBuffer.fillRoundRect(50, y - 4, 140, 22, 6, TFT_DARKGREEN);
+            frameBuffer.setTextColor(TFT_BLACK);
+            frameBuffer.setCursor(62, y);
+            frameBuffer.print(menuItems[idx]);
         } else {
-            tft.setTextColor(TFT_GREEN);
-            tft.setCursor(62, y);
-            tft.print(menuItems[idx]);
+            frameBuffer.setTextColor(TFT_GREEN);
+            frameBuffer.setCursor(62, y);
+            frameBuffer.print(menuItems[idx]);
         }
     }
 
-    tft.setTextColor(TFT_DARKGREEN);
-    tft.setCursor(55, 200);
-    tft.setTextSize(1);
-    tft.print("TAP: NAV   HOLD: SELECT");
+    frameBuffer.setTextColor(TFT_DARKGREEN);
+    frameBuffer.setCursor(55, 200);
+    frameBuffer.setTextSize(1);
+    frameBuffer.print("TAP: NAV   HOLD: SELECT");
+    frameBuffer.pushSprite(0, 0);
 }
 
 void drawAbout() {
-    tft.fillScreen(TFT_BLACK);
-    tft.setTextColor(TFT_GREEN);
-    tft.setTextSize(2);
-    tft.setCursor(55, 20);
-    tft.print("DIGITAL              TRIPWIRE");
-    tft.setTextSize(1);
-    tft.setCursor(25, 75);
-    tft.print("BLE/WiFi Radar Scanner");
-    tft.setCursor(25, 95);
-    tft.print("XIAO ESP32C5 WITH SEEED STUDIO             ROUND DISPLAY");
-    tft.setCursor(25, 125);
-    tft.printf("Devices: %d", deviceCount);
-    tft.setCursor(25, 145);
-    tft.printf("Known: %d", knownDeviceCount);
-    tft.setCursor(25, 165);
-    tft.printf("Logs: %d", totalLogs);
-    tft.setTextColor(TFT_DARKGREEN);
-    tft.setCursor(65, 218);
-    tft.print("NOTORIOUS SQUIRREL");
+    frameBuffer.fillScreen(TFT_BLACK);
+    frameBuffer.setTextColor(TFT_GREEN);
+    frameBuffer.setTextSize(2);
+    frameBuffer.setCursor(55, 20);
+    frameBuffer.print("DIGITAL              TRIPWIRE");
+    frameBuffer.setTextSize(1);
+    frameBuffer.setCursor(25, 75);
+    frameBuffer.print("BLE/WiFi Radar Scanner");
+    frameBuffer.setCursor(25, 95);
+    frameBuffer.print("XIAO ESP32C5 WITH SEEED STUDIO             ROUND DISPLAY");
+    frameBuffer.setCursor(25, 125);
+    frameBuffer.printf("Devices: %d", deviceCount);
+    frameBuffer.setCursor(25, 145);
+    frameBuffer.printf("Known: %d", knownDeviceCount);
+    frameBuffer.setCursor(25, 165);
+    frameBuffer.printf("Logs: %d", totalLogs);
+    frameBuffer.setTextColor(TFT_DARKGREEN);
+    frameBuffer.setCursor(65, 218);
+    frameBuffer.print("NOTORIOUS SQUIRREL");
+    frameBuffer.pushSprite(0, 0);
 }
 
 // ======================================================
@@ -1614,30 +1715,31 @@ void drawAbout() {
 // ======================================================
 
 void drawDeauthScreen() {
-    tft.fillScreen(TFT_BLACK);
-    tft.setTextColor(TFT_RED);
-    tft.setTextSize(1.75);
-    tft.setCursor(65, 30);
-    tft.print("DEAUTH DETECTOR");
-    tft.setTextSize(1);
-    tft.setTextColor(TFT_WHITE);
-    tft.setCursor(30, 75);
-    tft.print("Monitoring WiFi...");
-    tft.setTextColor(TFT_CYAN);
-    tft.setCursor(30, 100);
-    tft.print("Deauths:");
-    tft.setTextColor(TFT_YELLOW);
-    tft.setCursor(100, 100);
-    tft.print("0");
-    tft.setTextColor(TFT_WHITE);
-    tft.setCursor(30, 125);
-    tft.print("Last source:");
-    tft.setTextColor(TFT_ORANGE);
-    tft.setCursor(30, 145);
-    tft.print("none");
-    tft.setTextColor(TFT_DARKGREEN);
-    tft.setCursor(75, 218);
-    tft.print("HOLD TO RETURN");
+    frameBuffer.fillScreen(TFT_BLACK);
+    frameBuffer.setTextColor(TFT_RED);
+    frameBuffer.setTextSize(1.75);
+    frameBuffer.setCursor(65, 30);
+    frameBuffer.print("DEAUTH DETECTOR");
+    frameBuffer.setTextSize(1);
+    frameBuffer.setTextColor(TFT_WHITE);
+    frameBuffer.setCursor(30, 75);
+    frameBuffer.print("Monitoring WiFi...");
+    frameBuffer.setTextColor(TFT_CYAN);
+    frameBuffer.setCursor(30, 100);
+    frameBuffer.print("Deauths:");
+    frameBuffer.setTextColor(TFT_YELLOW);
+    frameBuffer.setCursor(100, 100);
+    frameBuffer.print("0");
+    frameBuffer.setTextColor(TFT_WHITE);
+    frameBuffer.setCursor(30, 125);
+    frameBuffer.print("Last source:");
+    frameBuffer.setTextColor(TFT_ORANGE);
+    frameBuffer.setCursor(30, 145);
+    frameBuffer.print("none");
+    frameBuffer.setTextColor(TFT_DARKGREEN);
+    frameBuffer.setCursor(75, 218);
+    frameBuffer.print("HOLD TO RETURN");
+    frameBuffer.pushSprite(0, 0);
 }
 
 // ======================================================
@@ -1659,10 +1761,18 @@ void setup() {
     tft.init();
     tft.setRotation(0);
 
-    // Boot screen
+    // Boot screen (draw directly to TFT — sprite doesn't exist yet)
     tft.fillScreen(TFT_BLACK);
     tft.pushImage(0, 0, 240, 240, notorious_squirrel_boot_240x240_TRUE24);
     delay(2000);
+
+    // Create sprite framebuffer for double-buffered rendering
+    tft.setAttribute(PSRAM_ENABLE, 1);
+    frameBuffer.setColorDepth(16);
+    if (!frameBuffer.createSprite(240, 240)) {
+        Serial.println("[BOOT] SPRITE FAILED!");
+        while (1) { delay(100); } // halt
+    }
 
     // SD card
     sdReady = SD.begin(SD_CS);
@@ -1706,12 +1816,14 @@ void loop() {
         if (lastAppState == APP_WIFI_HUNT && wifiHuntSniffing) {
             wifiHuntSniffing = false;
         }
+        pentestCleanup();
         tailsDrawn = false;
         hunterDrawn = false;
         wifiHuntDrawn = false;
         wifiInitted = false;
         wifiScanState = 0;
         wifiScanEntered = false;
+        wifiScrollOffset = 0;
         configDrawn = false;
         aboutDrawn = false;
         deauthDrawn = false;
@@ -1752,17 +1864,18 @@ void loop() {
 #ifndef DISABLE_BLE
             if (!bleInitted) {
                 bleInitted = true;
-                tft.fillScreen(TFT_BLACK);
-                tft.setTextColor(TFT_GREEN);
-                tft.setTextSize(2);
-                tft.setCursor(40, 100);
-                tft.print("INIT BLE...");
-                tft.setTextSize(1);
-                tft.setCursor(40, 130);
-                tft.print("(this may take a moment)");
-                tft.setTextColor(TFT_DARKGREEN);
-                tft.setCursor(40, 218);
-                tft.print("HOLD TO CANCEL");
+                frameBuffer.fillScreen(TFT_BLACK);
+                frameBuffer.setTextColor(TFT_GREEN);
+                frameBuffer.setTextSize(2);
+                frameBuffer.setCursor(40, 100);
+                frameBuffer.print("INIT BLE...");
+                frameBuffer.setTextSize(1);
+                frameBuffer.setCursor(40, 130);
+                frameBuffer.print("(this may take a moment)");
+                frameBuffer.setTextColor(TFT_DARKGREEN);
+                frameBuffer.setCursor(40, 218);
+                frameBuffer.print("HOLD TO CANCEL");
+                frameBuffer.pushSprite(0, 0);
                 bleInitDone = false;
                 bleInitSuccess = false;
                 bleInitStartMs = millis();
@@ -1776,11 +1889,12 @@ void loop() {
                     }
                     bleInitted = false;
                     appState = APP_MENU;
-                    tft.fillScreen(TFT_BLACK);
-                    tft.setTextColor(TFT_RED);
-                    tft.setTextSize(2);
-                    tft.setCursor(15, 100);
-                    tft.print("BLE INIT FAILED");
+                    frameBuffer.fillScreen(TFT_BLACK);
+                    frameBuffer.setTextColor(TFT_RED);
+                    frameBuffer.setTextSize(2);
+                    frameBuffer.setCursor(15, 100);
+                    frameBuffer.print("BLE INIT FAILED");
+                    frameBuffer.pushSprite(0, 0);
                     delay(1500);
                 }
                 break;
@@ -1806,21 +1920,23 @@ void loop() {
                 drawDevices();
                 drawUI();
                 drawSweep();
+                frameBuffer.pushSprite(0, 0);
                 lastDrawTime = now;
             }
 #else
-            tft.fillScreen(TFT_BLACK);
-            tft.setTextColor(TFT_RED);
-            tft.setTextSize(2);
-            tft.setCursor(20, 100);
-            tft.print("BLE NOT AVAILABLE");
-            tft.setTextSize(1);
-            tft.setTextColor(TFT_WHITE);
-            tft.setCursor(15, 140);
-            tft.print("ESP32-C5 lacks NimBLE");
-            tft.setTextColor(TFT_DARKGREEN);
-            tft.setCursor(40, 218);
-            tft.print("HOLD TO RETURN");
+            frameBuffer.fillScreen(TFT_BLACK);
+            frameBuffer.setTextColor(TFT_RED);
+            frameBuffer.setTextSize(2);
+            frameBuffer.setCursor(20, 100);
+            frameBuffer.print("BLE NOT AVAILABLE");
+            frameBuffer.setTextSize(1);
+            frameBuffer.setTextColor(TFT_WHITE);
+            frameBuffer.setCursor(15, 140);
+            frameBuffer.print("ESP32-C5 lacks NimBLE");
+            frameBuffer.setTextColor(TFT_DARKGREEN);
+            frameBuffer.setCursor(40, 218);
+            frameBuffer.print("HOLD TO RETURN");
+            frameBuffer.pushSprite(0, 0);
 #endif
             break;
 
@@ -1830,11 +1946,12 @@ void loop() {
         case APP_WIFI_SCAN:
             if (!wifiInitted) {
                 wifiInitted = true;
-                tft.fillScreen(TFT_BLACK);
-                tft.setTextColor(TFT_GREEN);
-                tft.setTextSize(2);
-                tft.setCursor(40, 100);
-                tft.print("INIT WiFi...");
+                frameBuffer.fillScreen(TFT_BLACK);
+                frameBuffer.setTextColor(TFT_GREEN);
+                frameBuffer.setTextSize(2);
+                frameBuffer.setCursor(40, 100);
+                frameBuffer.print("INIT WiFi...");
+                frameBuffer.pushSprite(0, 0);
                 WiFi.mode(WIFI_STA);
                 WiFi.disconnect();
                 delay(100);
@@ -1856,10 +1973,8 @@ void loop() {
             geigerSound();
             cleanupDevices();
             if (now - lastDrawTime > DRAW_INTERVAL_MS) {
-                drawRadarBg();
-                drawDevices();
-                drawUI();
-                drawSweep();
+                drawWiFiList();
+                frameBuffer.pushSprite(0, 0);
                 lastDrawTime = now;
             }
             break;
@@ -1874,7 +1989,7 @@ void loop() {
                 webUIActive = true;
                 apStartTime = now;
                 apClientEverConnected = false;
-                tft.fillScreen(TFT_BLACK);
+                frameBuffer.fillScreen(TFT_BLACK);
             }
             if (WiFi.softAPgetStationNum() > 0) {
                 apClientEverConnected = true;
@@ -1890,23 +2005,24 @@ void loop() {
                 handleWebUI();
                 if (!configDrawn) {
                     configDrawn = true;
-                    tft.fillScreen(TFT_BLACK);
-                    tft.setTextColor(TFT_GREEN);
-                    tft.setTextSize(2);
-                    tft.setCursor(45, 40);
-                    tft.print("CONFIG AP");
-                    tft.setTextSize(1);
-                    tft.setCursor(35, 80);
-                    tft.print("SSID: Tripwire-xxxx");
-                    tft.setCursor(35, 100);
-                    tft.print("IP: 192.168.4.1");
-                    tft.setCursor(35, 130);
-                    tft.print("Connect to configure");
-                    tft.setCursor(35, 160);
-                    tft.print("or hold to return");
-                    tft.setTextColor(TFT_DARKGREEN);
-                    tft.setCursor(55, 218);
-                    tft.print("HOLD TO RETURN");
+                    frameBuffer.fillScreen(TFT_BLACK);
+                    frameBuffer.setTextColor(TFT_GREEN);
+                    frameBuffer.setTextSize(2);
+                    frameBuffer.setCursor(45, 40);
+                    frameBuffer.print("CONFIG AP");
+                    frameBuffer.setTextSize(1);
+                    frameBuffer.setCursor(35, 80);
+                    frameBuffer.print("SSID: Tripwire-xxxx");
+                    frameBuffer.setCursor(35, 100);
+                    frameBuffer.print("IP: 192.168.4.1");
+                    frameBuffer.setCursor(35, 130);
+                    frameBuffer.print("Connect to configure");
+                    frameBuffer.setCursor(35, 160);
+                    frameBuffer.print("or hold to return");
+                    frameBuffer.setTextColor(TFT_DARKGREEN);
+                    frameBuffer.setCursor(55, 218);
+                    frameBuffer.print("HOLD TO RETURN");
+                    frameBuffer.pushSprite(0, 0);
                 }
             }
             break;
@@ -1961,20 +2077,21 @@ void loop() {
                 deauthFlashUntil = millis() + 100;
                 tone(BUZZER_PIN, 4000, 10);
                 // Update counter + last source
-                tft.fillRect(100, 100, 60, 12, TFT_BLACK);
-                tft.setTextColor(TFT_YELLOW);
-                tft.setCursor(100, 100);
-                tft.print(deauthCount);
-                tft.fillRect(20, 145, 200, 12, TFT_BLACK);
-                tft.setTextColor(TFT_ORANGE);
-                tft.setCursor(20, 145);
-                tft.print(deauthLastSrc);
+                frameBuffer.fillRect(100, 100, 60, 12, TFT_BLACK);
+                frameBuffer.setTextColor(TFT_YELLOW);
+                frameBuffer.setCursor(100, 100);
+                frameBuffer.print(deauthCount);
+                frameBuffer.fillRect(20, 145, 200, 12, TFT_BLACK);
+                frameBuffer.setTextColor(TFT_ORANGE);
+                frameBuffer.setCursor(20, 145);
+                frameBuffer.print(deauthLastSrc);
             }
             if (millis() < deauthFlashUntil) {
-                tft.fillRect(70, 60, 100, 6, TFT_RED);
+                frameBuffer.fillRect(70, 60, 100, 6, TFT_RED);
             } else {
-                tft.fillRect(70, 60, 100, 6, TFT_BLACK);
+                frameBuffer.fillRect(70, 60, 100, 6, TFT_BLACK);
             }
+            frameBuffer.pushSprite(0, 0);
             break;
 
         // ------------------------------------------------
@@ -2067,18 +2184,19 @@ void loop() {
                 }
             }
 #else
-            tft.fillScreen(TFT_BLACK);
-            tft.setTextColor(TFT_RED);
-            tft.setTextSize(2);
-            tft.setCursor(20, 100);
-            tft.print("HUNT NOT AVAILABLE");
-            tft.setTextSize(1);
-            tft.setTextColor(TFT_WHITE);
-            tft.setCursor(15, 140);
-            tft.print("Hunt requires BLE");
-            tft.setTextColor(TFT_DARKGREEN);
-            tft.setCursor(40, 218);
-            tft.print("HOLD TO RETURN");
+            frameBuffer.fillScreen(TFT_BLACK);
+            frameBuffer.setTextColor(TFT_RED);
+            frameBuffer.setTextSize(2);
+            frameBuffer.setCursor(20, 100);
+            frameBuffer.print("HUNT NOT AVAILABLE");
+            frameBuffer.setTextSize(1);
+            frameBuffer.setTextColor(TFT_WHITE);
+            frameBuffer.setCursor(15, 140);
+            frameBuffer.print("Hunt requires BLE");
+            frameBuffer.setTextColor(TFT_DARKGREEN);
+            frameBuffer.setCursor(40, 218);
+            frameBuffer.print("HOLD TO RETURN");
+            frameBuffer.pushSprite(0, 0);
 #endif
             break;
 
@@ -2235,19 +2353,47 @@ void loop() {
                 drawTailsScreen();
             }
 #else
-            tft.fillScreen(TFT_BLACK);
-            tft.setTextColor(TFT_RED);
-            tft.setTextSize(2);
-            tft.setCursor(10, 100);
-            tft.print("TRIPWIRE UNAVAILABLE");
-            tft.setTextSize(1);
-            tft.setTextColor(TFT_WHITE);
-            tft.setCursor(15, 140);
-            tft.print("Tripwire requires BLE");
-            tft.setTextColor(TFT_DARKGREEN);
-            tft.setCursor(40, 218);
-            tft.print("HOLD TO RETURN");
+            frameBuffer.fillScreen(TFT_BLACK);
+            frameBuffer.setTextColor(TFT_RED);
+            frameBuffer.setTextSize(2);
+            frameBuffer.setCursor(10, 100);
+            frameBuffer.print("TRIPWIRE UNAVAILABLE");
+            frameBuffer.setTextSize(1);
+            frameBuffer.setTextColor(TFT_WHITE);
+            frameBuffer.setCursor(15, 140);
+            frameBuffer.print("Tripwire requires BLE");
+            frameBuffer.setTextColor(TFT_DARKGREEN);
+            frameBuffer.setCursor(40, 218);
+            frameBuffer.print("HOLD TO RETURN");
+            frameBuffer.pushSprite(0, 0);
 #endif
+            break;
+    }
+
+    // ========================================================
+    // PENTEST MODES (C5-safe: evil twin + MAC rand detection only)
+    // ========================================================
+    switch (appState) {
+        case APP_EVIL_TWIN:
+            if (!tailsDrawn) {
+                tft.fillScreen(TFT_BLACK);
+                evilTwinScan();
+                tailsDrawn = true;
+            }
+            evilTwinDraw();
+            delay(5000);
+            appState = APP_MENU;
+            break;
+
+        case APP_MAC_RAND:
+            if (!tailsDrawn) {
+                tft.fillScreen(TFT_BLACK);
+                macRandDetect();
+                tailsDrawn = true;
+            }
+            macRandDraw();
+            delay(5000);
+            appState = APP_MENU;
             break;
     }
 
