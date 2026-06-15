@@ -20,6 +20,7 @@
 #include "squirrel_egg.h"
 #include "oui.h"
 #include "pentest.h"
+#include "modules/presence_radar/presence_radar.h"
 
 // ======================================================
 // CONSTANTS
@@ -93,8 +94,8 @@ ScanMode currentMode = BLE_MODE;
 
 AppState appState = APP_MENU;
 int menuIndex = 0;
-const char* menuItems[] = {"BLE Scan", "WiFi Scan", "Config AP", "Deauth", "Tripwire", "BLE Hunt", "WIFI Hunt", "Evil Twin", "MAC Rand", "About"};
-const int menuCount = 10;
+const char* menuItems[] = {"BLE Scan", "WiFi Scan", "Config AP", "Deauth", "Tripwire", "BLE Hunt", "WIFI Hunt", "Evil Twin", "MAC Rand", "Presence Radar", "About"};
+const int menuCount = 11;
 
 // ======================================================
 // SCAN RESULT QUEUE (producer: BLE callback / consumer: loop)
@@ -1537,6 +1538,16 @@ void handleTouch() {
             } else if (appState == APP_WIFI_SCAN) {
                 wifiScrollOffset++;
                 if (wifiScrollOffset >= cachedAPCount) wifiScrollOffset = 0;
+            } else if (appState == APP_PRESENCE_RADAR) {
+                if (presenceRadar.connectionState() == NODE_CONNECTED) {
+                    if (presenceRadar.eventLogVisible()) {
+                        presenceRadar.scrollEventLog(1);
+                    } else if (presenceRadar.nodeHealthVisible()) {
+                        presenceRadar.requestEventLog();
+                    } else {
+                        presenceRadar.requestNodeHealth();
+                    }
+                }
             }
         } else {
             // --- LONG HOLD ---
@@ -1554,7 +1565,8 @@ void handleTouch() {
                     case 6: appState = APP_WIFI_HUNT; break;
                     case 7: appState = APP_EVIL_TWIN; break;
                     case 8: appState = APP_MAC_RAND; break;
-                    case 9: appState = APP_ABOUT; break;
+                    case 9: appState = APP_PRESENCE_RADAR; break;
+                    case 10: appState = APP_ABOUT; break;
                 }
                 frameBuffer.fillScreen(TFT_BLACK);
             }
@@ -1815,6 +1827,9 @@ void loop() {
         }
         if (lastAppState == APP_WIFI_HUNT && wifiHuntSniffing) {
             wifiHuntSniffing = false;
+        }
+        if (lastAppState == APP_PRESENCE_RADAR) {
+            presenceRadar.cleanup();
         }
         pentestCleanup();
         tailsDrawn = false;
@@ -2367,6 +2382,30 @@ void loop() {
             frameBuffer.print("HOLD TO RETURN");
             frameBuffer.pushSprite(0, 0);
 #endif
+            break;
+
+        // ------------------------------------------------
+        // PRESENCE RADAR (ESP-NOW mmWave node)
+        // ------------------------------------------------
+        case APP_PRESENCE_RADAR:
+            if (firstMenuDraw) {
+                frameBuffer.fillScreen(TFT_BLACK);
+                presenceRadar.init();
+                if (!presenceRadar.isActive()) {
+                    frameBuffer.setTextColor(TFT_RED);
+                    frameBuffer.setTextSize(1);
+                    frameBuffer.setCursor(40, 100);
+                    frameBuffer.print("RADAR INIT FAILED");
+                    frameBuffer.setTextColor(TFT_DARKGREEN);
+                    frameBuffer.setCursor(40, 218);
+                    frameBuffer.print("HOLD TO RETURN");
+                    frameBuffer.pushSprite(0, 0);
+                }
+                firstMenuDraw = false;
+            }
+            if (presenceRadar.isActive()) {
+                presenceRadar.update();
+            }
             break;
     }
 
