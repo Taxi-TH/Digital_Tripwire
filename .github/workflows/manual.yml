@@ -1,4 +1,4 @@
-name: Compile Digital Tripwire CYD 
+name: Compile Digital Tripwire CYD with Zip Library
 
 on:
   push:
@@ -35,15 +35,15 @@ jobs:
           # ระบุค่าบอร์ดและคอนฟิกฮาร์ดแวร์สำหรับบอร์ด CYD (ESP32-2432S028R)
           fqbn: "esp32:esp32:esp32:JTAGAdapter=default,PSRAM=disabled,FlashMode=qio,FlashSize=4M,LoopCore=1,EventsCore=1,USBMode=default,CDCOnBoot=default,MSCOnBoot=default,DFUOnBoot=default,UploadSpeed=921600,EraseFlash=none,PartitionScheme=default,CPUFreq=240,FlashFreq=80"
           
-          # ลิงก์ดาวน์โหลดแพ็กเกจแกนหลักของบอร์ดตระกูล ESP32
+          # ลิงก์ดาวน์โหลดแพ็กเกจแกนหลักของบอร์ดตระกูล ESP32 (แก้ไข URL ให้ถูกต้อง)
           platforms: |
             - name: "esp32:esp32"
               source-url: "https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json"
           
-          # ติดตั้ง Library อื่นๆ ที่จำเป็น (ส่วน TFT_eSPI ระบบจะดึงจากโฟลเดอร์ที่เราแตก Zip ไว้ข้างต้น)
+          # ติดตั้ง Library อื่นๆ ที่จำเป็น (แก้ไข SimpleList ให้ดึงจาก Git โดยตรง)
           libraries: |
             - name: "XPT2046_Touchscreen"
-            - name: "SimpleList"
+            - source-url: "https://github.com/blackhack/SimpleList.git"
           
           # ระบุตำแหน่งโฟลเดอร์โค้ด .ino ของโปรเจกต์ และโฟลเดอร์ Library ที่เราเตรียมไว้
           sketch-paths: |
