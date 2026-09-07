@@ -30,23 +30,22 @@ jobs:
             exit 1
           fi
 
-          # ติดตั้ง SimpleList โดย clone จากคลังที่ถูกต้อง
-          git clone https://github.com/blackhack/SimpleList $HOME/Arduino/libraries/SimpleList || \
-          git clone https://github.com/mikalhart/TinyGPSPlus $HOME/Arduino/libraries/SimpleList || true
+          # ติดตั้ง SimpleList โดย clone เข้าโฟลเดอร์ libraries
+          git clone https://github.com/blackhack/SimpleList $HOME/Arduino/libraries/SimpleList || true
 
       # 3. คอมไพล์โค้ดบอร์ด ESP32 CYD ผ่าน Arduino CLI
       - name: Compile Arduino Sketch for ESP32 CYD
         uses: arduino/compile-sketches@v1
         with:
-          # ระบุค่าบอร์ดและคอนฟิกฮาร์ดแวร์สำหรับบอร์ด CYD (ESP32-2432S028R)
-          fqbn: "esp32:esp32:esp32:JTAGAdapter=default,PSRAM=disabled,FlashMode=qio,FlashSize=4M,LoopCore=1,EventsCore=1,USBMode=default,CDCOnBoot=default,MSCOnBoot=default,DFUOnBoot=default,UploadSpeed=921600,EraseFlash=none,PartitionScheme=default,CPUFreq=240,FlashFreq=80"
+          # FQBN ที่ย่อสั้นลงเพื่อแก้ปัญหา File name too long
+          fqbn: "esp32:esp32:esp32:PSRAM=disabled,FlashMode=qio,FlashSize=4M,PartitionScheme=default,CPUFreq=240"
           
           # ลิงก์ดาวน์โหลดแพ็กเกจแกนหลักของบอร์ดตระกูล ESP32
           platforms: |
             - name: "esp32:esp32"
               source-url: "https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json"
           
-          # เหลือไว้เฉพาะ Library ที่อยู่ใน Arduino Library Manager ปกติ
+          # ติดตั้ง Library อื่นๆ ที่มีใน Library Manager
           libraries: |
             - name: "XPT2046_Touchscreen"
           
