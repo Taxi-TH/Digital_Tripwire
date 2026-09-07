@@ -1,4 +1,4 @@
-name: Compile Digital Tripwire CYD with Zip Library
+name: Compile Digital Tripwire CYD 
 
 on:
   push:
