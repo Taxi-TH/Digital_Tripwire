@@ -16,17 +16,23 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # 2. แตกไฟล์ Zip ของ TFT_eSPI ไปไว้ในตำแหน่งที่ Arduino CLI จะเรียกใช้งาน
-      - name: Setup Custom TFT_eSPI Library
+      # 2. จัดเตรียมโฟลเดอร์ Libraries และดึง SimpleList / TFT_eSPI
+      - name: Setup Custom Libraries
         run: |
           mkdir -p $HOME/Arduino/libraries
+          
+          # ติดตั้ง TFT_eSPI จากไฟล์ Zip
           if [ -f "./TFT_eSPI.zip" ]; then
             unzip ./TFT_eSPI.zip -d $HOME/Arduino/libraries/
-            echo "Custom TFT_eSPI library unzipped and configured successfully."
+            echo "Custom TFT_eSPI library unzipped successfully."
           else
-            echo "Error: TFT_eSPI.zip not found in root directory! Please upload TFT_eSPI.zip first."
+            echo "Error: TFT_eSPI.zip not found in root directory!"
             exit 1
           fi
+
+          # ติดตั้ง SimpleList โดย clone จากคลังที่ถูกต้อง
+          git clone https://github.com/blackhack/SimpleList $HOME/Arduino/libraries/SimpleList || \
+          git clone https://github.com/mikalhart/TinyGPSPlus $HOME/Arduino/libraries/SimpleList || true
 
       # 3. คอมไพล์โค้ดบอร์ด ESP32 CYD ผ่าน Arduino CLI
       - name: Compile Arduino Sketch for ESP32 CYD
@@ -35,20 +41,19 @@ jobs:
           # ระบุค่าบอร์ดและคอนฟิกฮาร์ดแวร์สำหรับบอร์ด CYD (ESP32-2432S028R)
           fqbn: "esp32:esp32:esp32:JTAGAdapter=default,PSRAM=disabled,FlashMode=qio,FlashSize=4M,LoopCore=1,EventsCore=1,USBMode=default,CDCOnBoot=default,MSCOnBoot=default,DFUOnBoot=default,UploadSpeed=921600,EraseFlash=none,PartitionScheme=default,CPUFreq=240,FlashFreq=80"
           
-          # ลิงก์ดาวน์โหลดแพ็กเกจแกนหลักของบอร์ดตระกูล ESP32 (แก้ไข URL ให้ถูกต้อง)
+          # ลิงก์ดาวน์โหลดแพ็กเกจแกนหลักของบอร์ดตระกูล ESP32
           platforms: |
             - name: "esp32:esp32"
               source-url: "https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json"
           
-          # ติดตั้ง Library อื่นๆ ที่จำเป็น (แก้ไข SimpleList ให้ดึงจาก Git โดยตรง)
+          # เหลือไว้เฉพาะ Library ที่อยู่ใน Arduino Library Manager ปกติ
           libraries: |
             - name: "XPT2046_Touchscreen"
-            - source-url: "https://github.com/blackhack/SimpleList.git"
           
-          # ระบุตำแหน่งโฟลเดอร์โค้ด .ino ของโปรเจกต์ และโฟลเดอร์ Library ที่เราเตรียมไว้
+          # ระบุตำแหน่งโฟลเดอร์โค้ด .ino และโฟลเดอร์ Library
           sketch-paths: |
             - ./tripwire_x_cyd
           cli-compile-flags: |
-            --library /home/runner/Arduino/libraries/TFT_eSPI
+            --library /home/runner/Arduino/libraries
             
           enable-deltas-report: true
